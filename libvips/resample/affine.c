@@ -116,7 +116,7 @@
 /*
 #define DEBUG_VERBOSE
 #define DEBUG
- */
+*/
 
 #ifdef HAVE_CONFIG_H
 #include <config.h>
@@ -147,7 +147,9 @@ typedef struct _VipsAffine {
 	double idx;
 	double idy;
 
-	VipsTransformation trn;
+	VipsTransformation trn;	
+	VipsArrayDouble *background;
+	VipsPel *ink;
 
 } VipsAffine;
 
@@ -198,7 +200,7 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 		vips_interpolate_get_window_offset( affine->interpolate );
 	const VipsInterpolateMethod interpolate = 
 		vips_interpolate_get_method( affine->interpolate );
-
+	
 	/* Area we generate in the output image.
 	 */
 	const VipsRect *r = &or->valid;
@@ -275,7 +277,7 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 #endif /*DEBUG_VERBOSE*/
 
 	if( vips_rect_isempty( &clipped ) ) {
-		vips_region_black( or );
+		vips_region_paint_pel(or, &or->valid, affine->ink);		
 		return( 0 );
 	}
 	if( vips_region_prepare( ir, &clipped ) )
@@ -308,8 +310,6 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 		 */
 		double ix, iy;
 
-		VipsPel *q;
-
 		/* To (3).
 		 */
 		ix = affine->trn.ia * ox + affine->trn.ib * oy;
@@ -325,7 +325,7 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 		ix += window_offset;
 		iy += window_offset;
 
-		q = VIPS_REGION_ADDR( or, le, y );
+		VipsPel *q = VIPS_REGION_ADDR( or, le, y );
 
 		for( x = le; x < ri; x++ ) {
 			int fx, fy; 	
@@ -355,8 +355,11 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 					q, ir, ix, iy );
 			}
 			else {
-				for( z = 0; z < ps; z++ ) 
-					q[z] = 0;
+				for( z = 0; z < ps; z++ )
+				{
+					int band = ((double*)VIPS_AREA( affine->background )->data)[z];
+					q[z] = band;
+				}				
 			}
 
 			ix += ddx;
@@ -375,6 +378,8 @@ vips_affine_gen( VipsRegion *or, void *seq, void *a, void *b, gboolean *stop )
 static int
 vips_affine_build( VipsObject *object )
 {
+	printf("vips_affine_build v.0.0.1\n");
+
 	VipsObjectClass *class = VIPS_OBJECT_GET_CLASS( object );
 	VipsResample *resample = VIPS_RESAMPLE( object );
 	VipsAffine *affine = (VipsAffine *) object;
@@ -477,16 +482,27 @@ vips_affine_build( VipsObject *object )
 	if( vips_image_decode( in, &t[0] ) )
 		return( -1 );
 	in = t[0];
-
+	
 	/* Add new pixels around the input so we can interpolate at the edges.
 	 */
 	if( vips_embed( in, &t[2], 
-		window_offset, window_offset, 
-		in->Xsize + window_size - 1, in->Ysize + window_size - 1,
-		"extend", VIPS_EXTEND_COPY,
+		window_offset, window_offset,		
+		in->Xsize + window_size - 1, in->Ysize + window_size - 1,		
+		"extend", VIPS_EXTEND_BACKGROUND,		
+		"background",  (VipsPel *)affine->background,
 		NULL ) )
 		return( -1 );
 	in = t[2];
+	
+	if( !(affine->ink = vips__vector_to_ink( 
+				class->nickname, in,
+				VIPS_AREA( affine->background )->data, NULL, 
+				VIPS_AREA( affine->background )->n )) )
+	{
+				return( -1 );
+	}
+	
+
 
 	/* Normally SMALLTILE ... except if this is strictly a size 
 	 * up/down affine.
@@ -591,11 +607,19 @@ vips_affine_class_init( VipsAffineClass *class )
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsAffine, idy ),
 		-10000000, 10000000, 0 );
+
+	VIPS_ARG_BOXED( class, "background", 116, 
+		_( "Background" ), 
+		_( "Color for background pixels" ),
+		VIPS_ARGUMENT_OPTIONAL_INPUT,
+		G_STRUCT_OFFSET( VipsAffine, background ),
+		VIPS_TYPE_ARRAY_DOUBLE );
 }
 
 static void
 vips_affine_init( VipsAffine *affine )
 {
+	affine->background = vips_array_double_newv( 1, 0.0 );
 }
 
 /**

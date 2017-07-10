@@ -1,3 +1,9 @@
+gtk-doc.m4
+compile
+bin/*
+include/*
+share/*
+lib/*
 a.out
 *.log
 *.trs
